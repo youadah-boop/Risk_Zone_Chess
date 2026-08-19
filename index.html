@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Risk Zone Chess — Trajectory AI & King Capture</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<style>
+:root {
+  --bg:#15171c;
+  --panel-bg:#1c1f26;
+  --card:#262a33;
+  --card-alt:#20232b;
+  --text:#e7ecf2;
+  --muted:#93a0b3;
+  --accent:#f0546b;
+  --success:#33d17a;
+  --warn:#f2c14e;
+  --btn:#3f8ee0;
+  --btn-hover:#5aa3ec;
+  --btn-active:#33d17a;
+  --btn-inactive:#333846;
+  --light-sq:#f0d9b5;
+  --dark-sq:#b58863;
+  --risk:rgba(255,145,0,0.28);
+  --risk-revealed:rgba(255, 0, 0, 0.4);
+  --deadly:#dc143c;
+  --selected:rgba(255,235,80,0.55);
+  --last-move:rgba(140,220,110,0.4);
+  --check:rgba(235,60,60,0.55);
+  --legal-dot:rgba(20,20,20,0.55);
+  --legal-capture:rgba(220,60,60,0.9);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; min-height:100vh;
+  background:radial-gradient(circle at top, #1e222b, #101216 70%);
+  color:var(--text); font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  display:flex; align-items:center; justify-content:center; padding:20px;
+}
+.app { display:flex; gap:20px; max-width:1120px; width:100%; align-items:flex-start; flex-wrap:wrap; justify-content:center; }
+.board-wrap { position:relative; }
+.board {
+  width:min(86vmin,560px); height:min(86vmin,560px);
+  display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(8,1fr);
+  border-radius:10px; overflow:hidden; box-shadow:0 12px 34px rgba(0,0,0,0.5);
+  border:3px solid #0c0d10;
+}
+.square { position:relative; display:flex; align-items:center; justify-content:center; cursor:pointer; user-select:none; }
+.square.light { background:var(--light-sq); }
+.square.dark { background:var(--dark-sq); }
+.square.risk::after { content:""; position:absolute; inset:0; background:var(--risk); pointer-events:none; }
+.square.risk-revealed::after { content:""; position:absolute; inset:0; background:var(--risk-revealed); pointer-events:none; box-shadow: inset 0 0 10px rgba(255, 0, 0, 0.8); transition: background-color 0.3s ease; }
+.square.last-move::before { content:""; position:absolute; inset:0; background:var(--last-move); pointer-events:none; }
+.square.selected::before { content:""; position:absolute; inset:0; background:var(--selected); pointer-events:none; }
+.square.check::before { content:""; position:absolute; inset:0; background:var(--check); pointer-events:none; }
+.square.deadly::before { content:""; position:absolute; inset:0; background:var(--deadly); opacity:0.8; pointer-events:none; }
+.square .piece { font-size:min(7.4vmin,48px); line-height:1; z-index:2; filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5)); }
+.square .piece.white { color:#fdfdfd; }
+.square .piece.black { color:#17181b; }
+.square .legal-dot { position:absolute; width:26%; height:26%; border-radius:50%; background:var(--legal-dot); z-index:1; }
+.square .legal-capture { position:absolute; inset:6%; border-radius:50%; border:4px solid var(--legal-capture); z-index:1; }
+.square .skull { position:absolute; font-size:min(6vmin,34px); z-index:3; filter:drop-shadow(0 1px 3px rgba(0,0,0,0.7)); }
+.square .file-label, .square .rank-label { position:absolute; font-size:10px; opacity:0.65; font-weight:700; }
+.square .file-label { bottom:2px; right:4px; }
+.square .rank-label { top:2px; left:4px; }
+.square .file-label.on-dark, .square .rank-label.on-dark { color:var(--light-sq); }
+.square .file-label.on-light, .square .rank-label.on-light { color:var(--dark-sq); }
+.overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(8,9,11,0.78); border-radius:10px; z-index:10; }
+.overlay.hidden { display:none; }
+.promo-card, .over-card { background:var(--card); border-radius:14px; padding:22px 26px; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,0.5); }
+.promo-title, .over-title { font-weight:700; font-size:18px; margin-bottom:14px; }
+.promo-choices { display:flex; gap:10px; }
+.promo-choice { width:64px; height:64px; border-radius:10px; background:var(--card-alt); border:2px solid transparent; display:flex; align-items:center; justify-content:center; font-size:34px; cursor:pointer; color:#fdfdfd; }
+.promo-choice:hover { background:var(--btn-hover); border-color:var(--btn); }
+.over-result { font-size:20px; color:var(--warn); font-weight:700; margin-bottom:18px; }
+.over-hint { font-size:12px; color:var(--muted); margin-top:-10px; margin-bottom:16px; }
+.panel {
+  width:380px; background:var(--panel-bg); border-radius:14px; padding:18px;
+  box-shadow:0 12px 34px rgba(0,0,0,0.45); display:flex; flex-direction:column; gap:14px;
+  max-height:min(86vmin,640px);
+}
+.panel-header { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.panel-header h1 { font-size:16px; margin:0; }
+.panel-sub { font-size:11px; color:var(--muted); margin-top:-8px; }
+.section-label { font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); margin-bottom:6px; font-weight:700; }
+.btn { border:none; border-radius:8px; padding:9px 14px; font-size:13px; font-weight:600; cursor:pointer; color:#fff; transition:background 0.15s; }
+.btn-primary { background:var(--btn); }
+.btn-primary:hover { background:var(--btn-hover); }
+.diff-buttons { display:flex; gap:8px; }
+.diff-btn { flex:1; padding:8px 4px; border-radius:8px; border:none; cursor:pointer; font-weight:600; font-size:12px; background:var(--btn-inactive); color:#fff; }
+.diff-btn:hover { background:var(--btn-hover); }
+.diff-btn.active { background:var(--btn-active); }
+.diff-desc { font-size:11px; color:var(--warn); margin-top:6px; min-height:14px; }
+.status-section { background:var(--card); border-radius:10px; padding:10px 12px; font-size:13px; color:var(--muted); display:flex; align-items:center; gap:8px; }
+.status-dot { width:9px; height:9px; border-radius:50%; flex:none; }
+.captured-row { min-height:22px; font-size:18px; letter-spacing:1px; }
+.log-section { flex:1; display:flex; flex-direction:column; min-height:140px; }
+.log { flex:1; overflow-y:auto; background:var(--card); border-radius:10px; padding:10px 12px; font-size:12px; line-height:1.55; font-family:monospace; }
+.log div { margin-bottom:3px; word-break:break-word; }
+.msg-win { color:var(--success); font-weight:700; }
+.msg-danger { color:var(--accent); font-weight:600; }
+.msg-warn { color:var(--warn); }
+.msg-info { color:#62b0ff; }
+.msg-normal { color:var(--text); }
+@media (max-width: 820px) {
+  .app { flex-direction:column; align-items:center; }
+  .panel { width:min(560px,92vw); max-height:none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="board-wrap">
+    <div id="board" class="board"></div>
+    <div id="promotionOverlay" class="overlay hidden">
+      <div class="promo-card">
+        <div class="promo-title">Choose your promotion</div>
+        <div class="promo-choices" id="promoChoices"></div>
+      </div>
+    </div>
+    <div id="gameOverOverlay" class="overlay hidden">
+      <div class="over-card">
+        <div class="over-title">Game Over</div>
+        <div class="over-result" id="overResult"></div>
+        <div class="over-hint">Click "Replay" to start over</div>
+        <button id="overReplayBtn" class="btn btn-primary">🔄 Replay</button>
+      </div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-header">
+      <h1>♜ Risk Zone Chess</h1>
+      <button id="newGameBtn" class="btn btn-primary">🔄 New Game</button>
+    </div>
+    <div class="panel-sub">You = White · Bot = Black · 
+ </div>
+    <div class="panel-section">
+      <div class="section-label">Bot difficulty</div>
+      <div class="diff-buttons" id="diffButtons"></div>
+      <div class="diff-desc" id="diffDesc"></div>
+    </div>
+    <div class="panel-section status-section" id="statusSection"></div>
+    <div class="panel-section">
+      <div class="section-label">Captured pieces</div>
+      <div class="captured-row" id="capturedBlack"></div>
+      <div class="captured-row" id="capturedWhite"></div>
+    </div>
+    <div class="panel-section log-section">
+      <div class="section-label">Prediction log (MultiPV)</div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+const FILES = 'abcdefgh';
+const LOCAL_STOCKFISH_WORKER = 'stockfish/stockfish-18-lite-single.js';
+const CDN_STOCKFISH_URL = 'https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js';
+
+const FUTURE_GAMMA = 0.6;       
+const PREDICTION_HORIZON = 6;    
+
+const DIFFICULTIES = {
+  // limitStrength + elo use Stockfish's native UCI_LimitStrength / UCI_Elo options
+  // to target a real playing strength (instead of the unreliable "Skill Level" in ELO terms).
+  // Note: most Stockfish builds cap UCI_Elo at a minimum of ~1320,
+  // so "Easy" is set to this engine floor (the weakest natively reachable value).
+  Easy:   { limitStrength: true,  elo: 1320, moveTime: 500,  multiPV: 1, desc: 'Throttled Stockfish (~1320 Elo, engine floor)' },
+  Medium: { limitStrength: true,  elo: 1700, moveTime: 1000, multiPV: 2, desc: 'Throttled Stockfish (~1700 Elo) + 3-move prediction (γ=0.6)' },
+  Hard:   { limitStrength: false, elo: null, moveTime: 1800, multiPV: 3, desc: 'Full-strength Stockfish (no limit) + fine trajectory optimization' }
+};
+
+const PIECE_VALUES = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 20000 };
+const PIECE_NAME_EN = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' };
+const UNICODE_WHITE = { p: '♙', n: '♘', b: '♗', r: '♖', q: '♕', k: '♔' };
+const UNICODE_BLACK = { p: '♟', n: '♞', b: '♝', r: '♜', q: '♛', k: '♚' };
+
+const RISK_WEIGHTS = {
+  kingPenalty: 5000,
+  queenPenalty: 280,
+  rookPenalty: 150,
+  bishopPenalty: 100,
+  knightPenalty: 95,
+  pawnPenalty: 30
+};
+
+const riskSquares = [];
+for (const f of FILES) for (const r of [4, 5]) riskSquares.push(f + r);
+
+let game = new Chess();
+let selectedSquare = null, legalTargets = [], lastMove = null, deadlySquare = null;
+let gameOver = false, winnerMsg = '', logMessages = [];
+let difficulty = 'Medium', botThinking = false, promotionPending = null;
+let temporarilyRevealedSquare = null;
+
+let stockfishEngine = null, stockfishReady = false, stockfishFailed = false;
+let stockfishCurrentRequest = null;
+
+const boardEl = document.getElementById('board');
+const logEl = document.getElementById('log');
+const capturedBlackEl = document.getElementById('capturedBlack');
+const capturedWhiteEl = document.getElementById('capturedWhite');
+const diffButtonsEl = document.getElementById('diffButtons');
+const diffDescEl = document.getElementById('diffDesc');
+const statusSectionEl = document.getElementById('statusSection');
+const promoOverlay = document.getElementById('promotionOverlay');
+const promoChoicesEl = document.getElementById('promoChoices');
+const overOverlay = document.getElementById('gameOverOverlay');
+const overResultEl = document.getElementById('overResult');
+
+document.getElementById('newGameBtn').addEventListener('click', resetGame);
+document.getElementById('overReplayBtn').addEventListener('click', resetGame);
+
+Object.keys(DIFFICULTIES).forEach(name => {
+  const btn = document.createElement('button');
+  btn.className = 'diff-btn';
+  btn.textContent = name;
+  btn.addEventListener('click', () => setDifficulty(name));
+  btn.addEventListener('mouseenter', () => diffDescEl.textContent = DIFFICULTIES[name].desc);
+  btn.addEventListener('mouseleave', () => diffDescEl.textContent = '');
+  diffButtonsEl.appendChild(btn);
+});
+
+function addLog(text) { logMessages.push(text); }
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function endGame(text) { gameOver = true; winnerMsg = text; addLog('🏆 ' + text); }
+function isRiskSquare(sq) { return !!sq && /[45]$/.test(sq); }
+
+function findMoveByUci(g, uci) {
+  if (!uci || uci === '(none)') return null;
+  const from = uci.slice(0, 2), to = uci.slice(2, 4);
+  const promotion = uci.length >= 5 ? uci[4].toLowerCase() : null;
+  return g.moves({ verbose: true }).find(m =>
+    m.from === from && m.to === to && (!promotion || m.promotion === promotion)
+  ) || null;
+}
+
+function formatScore(score) {
+  if (score === undefined || score === null) return '?';
+  if (typeof score === 'object') {
+    if (score.mate !== undefined) return score.mate > 0 ? `M+${score.mate}` : `M-${Math.abs(score.mate)}`;
+    return (score.cp >= 0 ? '+' : '') + (score.cp / 100).toFixed(2);
+  }
+  if (Math.abs(score) >= 90000) return score > 0 ? 'M+' : 'M-';
+  return (score >= 0 ? '+' : '') + (score / 100).toFixed(2);
+}
+
+/* ---------------- KING GEOMETRY & ATTACKS ---------------- */
+
+function getKingPos(board, color) {
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) {
+    const p = board[i][j];
+    if (p && p.type === 'k' && p.color === color) return { square: FILES[j] + (8 - i), i, j };
+  }
+  return null;
+}
+
+function canPieceReachSquare(board, fI, fJ, tI, tJ, type, color) {
+  const dI = tI - fI, dJ = tJ - fJ;
+  if (type === 'p') {
+    const dir = color === 'w' ? -1 : 1;
+    return dI === dir && Math.abs(dJ) === 1;
+  }
+  if (type === 'n') return (Math.abs(dI) === 1 && Math.abs(dJ) === 2) || (Math.abs(dI) === 2 && Math.abs(dJ) === 1);
+  if (type === 'k') return Math.abs(dI) <= 1 && Math.abs(dJ) <= 1 && (dI !== 0 || dJ !== 0);
+  
+  if (type === 'r' || type === 'q') {
+    if (dI === 0 || dJ === 0) {
+      const stepI = dI === 0 ? 0 : dI / Math.abs(dI);
+      const stepJ = dJ === 0 ? 0 : dJ / Math.abs(dJ);
+      let currI = fI + stepI, currJ = fJ + stepJ;
+      while (currI !== tI || currJ !== tJ) {
+        if (board[currI][currJ]) return false;
+        currI += stepI; currJ += stepJ;
+      }
+      return true;
+    }
+  }
+  if (type === 'b' || type === 'q') {
+    if (Math.abs(dI) === Math.abs(dJ) && dI !== 0) {
+      const stepI = dI / Math.abs(dI);
+      const stepJ = dJ / Math.abs(dJ);
+      let currI = fI + stepI, currJ = fJ + stepJ;
+      while (currI !== tI || currJ !== tJ) {
+        if (board[currI][currJ]) return false;
+        currI += stepI; currJ += stepJ;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+function getAttackingMovesToSquare(g, targetSq, attackerColor) {
+  const board = g.board();
+  const file0 = FILES.indexOf(targetSq[0]);
+  const rank0 = parseInt(targetSq[1], 10) - 1;
+  const tI = 7 - rank0, tJ = file0;
+  const attackers = [];
+
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) {
+    const p = board[i][j];
+    if (p && p.color === attackerColor) {
+      if (canPieceReachSquare(board, i, j, tI, tJ, p.type, attackerColor)) {
+        attackers.push({ from: FILES[j] + (8 - i), to: targetSq, piece: p.type, color: attackerColor });
+      }
+    }
+  }
+  return attackers;
+}
+
+/* ---------------- TRAJECTORY RISK EVALUATION ---------------- */
+
+function calculateStepRisk(g, move) {
+  const piece = g.get(move.from);
+  if (!piece) return 0;
+
+  const destinationRisk = isRiskSquare(move.to);
+  if (!destinationRisk) return 0;
+
+  return {
+    k: RISK_WEIGHTS.kingPenalty,
+    q: RISK_WEIGHTS.queenPenalty,
+    r: RISK_WEIGHTS.rookPenalty,
+    b: RISK_WEIGHTS.bishopPenalty,
+    n: RISK_WEIGHTS.knightPenalty,
+    p: RISK_WEIGHTS.pawnPenalty
+  }[piece.type] || 0;
+}
+
+function evaluateCandidatePV(g, candidate, maxCp) {
+  const tempGame = new Chess(g.fen());
+  const pvMoves = candidate.pv || [candidate.uci];
+
+  let cumulativeRisk = 0;
+  let weight = 1.0;
+  const trajectoryDetails = [];
+
+  for (let i = 0; i < Math.min(pvMoves.length, PREDICTION_HORIZON); i++) {
+    const uciMove = pvMoves[i];
+    const move = findMoveByUci(tempGame, uciMove);
+    if (!move) break;
+
+    const isBotMove = (i % 2 === 0);
+
+    if (isBotMove) {
+      const stepRisk = calculateStepRisk(tempGame, move);
+      if (stepRisk > 0) {
+        const weightedStep = stepRisk * weight;
+        cumulativeRisk += weightedStep;
+        trajectoryDetails.push(`t+${i/2}:${move.from}→${move.to}(+${Math.round(weightedStep)})`);
+      }
+    }
+
+    tempGame.move(move);
+    weight *= FUTURE_GAMMA;
+  }
+
+  const cpGap = Math.max(0, maxCp - (candidate.score || 0));
+  const finalScore = -cpGap - (cumulativeRisk * 0.4);
+
+  return {
+    candidate,
+    move: candidate.move || findMoveByUci(g, candidate.uci),
+    cumulativeRisk: Math.round(cumulativeRisk),
+    cpGap,
+    finalScore,
+    trajectoryDetails
+  };
+}
+
+function isPinned(square, color) {
+    const piece = game.get(square);
+    if (!piece || piece.color !== color) return false;
+
+    const kingSquare = findKingSquare(color);
+    if (!kingSquare) return false;
+
+    const opponentColor = color === 'w' ? 'b' : 'w';
+
+    // Attackers already reaching the King with the piece still in place
+    // (e.g. the King may already be in check for an unrelated reason).
+    const attackersBefore = getAttackingMovesToSquare(game, kingSquare, opponentColor);
+    const beforeFromSquares = new Set(attackersBefore.map(a => a.from));
+
+    // Temporarily remove the piece to see if the King becomes exposed
+    game.remove(square);
+
+    // Use the existing geometry function to check if the opponent now attacks the King
+    const attackersAfter = getAttackingMovesToSquare(game, kingSquare, opponentColor);
+
+    // Restore the piece immediately
+    game.put({ type: piece.type, color: piece.color }, square);
+
+    // A real pin only exists if removing the piece exposes a NEW attacking line
+    // that wasn't already there — otherwise we'd flag a piece as "pinned" just
+    // because the King happens to already be in check from something else.
+    return attackersAfter.some(a => !beforeFromSquares.has(a.from));
+}
+
+
+function findKingSquare(color) {
+    const board = game.board();
+    for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+            if (board[r][c] && board[r][c].type === 'k' && board[r][c].color === color) {
+                return String.fromCharCode(97 + c) + (8 - r);
+            }
+        }
+    }
+    return null;
+}
+
+function chooseRiskAwareMove(g, candidates) {
+  if (!candidates || !candidates.length) return null;
+
+  const legalCandidates = candidates.map(c => {
+    const move = c.move || findMoveByUci(g, c.uci);
+    return move ? { ...c, move } : null;
+  }).filter(Boolean);
+
+  if (!legalCandidates.length) return null;
+
+  const maxCp = Math.max(...legalCandidates.map(c => c.score || 0));
+  const evaluated = legalCandidates.map(c => evaluateCandidatePV(g, c, maxCp));
+
+  evaluated.sort((a, b) => b.finalScore - a.finalScore);
+
+  return { chosen: evaluated[0], evaluated };
+}
+
+function logTrajectoryAnalysis(selection) {
+  if (!selection) return;
+
+  addLog('🔮 Trajectory analysis (Stockfish PV):');
+
+  selection.evaluated.forEach((x, i) => {
+    const uciPV = (x.candidate.pv || [x.candidate.uci]).slice(0, 4).join(' ');
+    const trajInfo = x.trajectoryDetails.length ? ` ⚠ [${x.trajectoryDetails.join(', ')}]` : ' ✓ Safe trajectory';
+
+    addLog(
+      `  ${i + 1}. ${x.move.from}→${x.move.to} (${formatScore(x.candidate.score)})` +
+      ` | Risk Traj: -${x.cumulativeRisk}${trajInfo}`
+    );
+    addLog(`     PV: ${uciPV}...`);
+  });
+
+  const c = selection.chosen;
+  if (c.cumulativeRisk > 0) {
+    addLog(`🛡 Compromise choice: ${c.move.from}→${c.move.to} (trajectory risk minimized to -${c.cumulativeRisk})`);
+  } else {
+    addLog(`🎯 Optimal and safe choice: ${c.move.from}→${c.move.to} (${formatScore(c.candidate.score)})`);
+  }
+}
+
+/* ---------------- GAME STATE ---------------- */
+
+function isDrawByMaterialOrFiftyMoves(g) {
+  if (g.insufficient_material()) return true;
+  const h = parseInt(g.fen().split(' ')[4], 10);
+  return !isNaN(h) && h >= 100;
+}
+
+function checkBoardStatus() {
+  if (game.in_checkmate()) {
+    const winner = game.turn() === 'w' ? 'Black' : 'White';
+    addLog('Checkmate!'); endGame('Victory for ' + winner);
+  } else if (game.in_stalemate()) {
+    addLog('Stalemate!'); endGame('Draw (stalemate)');
+  } else if (isDrawByMaterialOrFiftyMoves(game)) {
+    addLog('Draw.'); endGame('Draw');
+  } else if (game.in_check()) addLog('Check!');
+}
+
+/* ---------------- STOCKFISH (LOCAL / CDN BLOB HYBRID) ---------------- */
+
+function sendStockfish(cmd) {
+  if (stockfishEngine) try { stockfishEngine.postMessage(cmd); } catch (e) {}
+}
+
+function createCdnWorker() {
+  const blobCode = `importScripts('${CDN_STOCKFISH_URL}');`;
+  const blob = new Blob([blobCode], { type: 'application/javascript' });
+  return new Worker(URL.createObjectURL(blob));
+}
+
+function handleStockfishFailure() {
+  stockfishFailed = true; stockfishReady = false;
+  addLog('⚠ Stockfish unavailable. MOCK mode activated.');
+  if (stockfishCurrentRequest) {
+    const r = stockfishCurrentRequest;
+    stockfishCurrentRequest = null;
+    r.resolve(null);
+  }
+  render();
+}
+
+function initStockfish() {
+  if (stockfishEngine || stockfishFailed) return;
+  addLog('♟ Loading Stockfish engine...');
+
+  const isFileProtocol = window.location.protocol === 'file:';
+
+  function attachWorkerEvents(worker, isCdn) {
+    stockfishEngine = worker;
+    stockfishEngine.onmessage = e => handleStockfishMessage(String(e.data || ''));
+    stockfishEngine.onerror = () => {
+      if (!isCdn && !stockfishReady) {
+        addLog('⚠ Dynamically switching to CDN Worker...');
+        try {
+          if (stockfishEngine) stockfishEngine.terminate();
+          attachWorkerEvents(createCdnWorker(), true);
+          sendStockfish('uci');
+          sendStockfish('setoption name MultiPV value 3');
+          sendStockfish('isready');
+        } catch (e2) { handleStockfishFailure(); }
+      } else { handleStockfishFailure(); }
+    };
+  }
+
+  try {
+    if (isFileProtocol) attachWorkerEvents(createCdnWorker(), true);
+    else attachWorkerEvents(new Worker(LOCAL_STOCKFISH_WORKER), false);
+    
+    sendStockfish('uci');
+    sendStockfish('setoption name MultiPV value 3');
+    sendStockfish('isready');
+  } catch (e) {
+    try {
+      attachWorkerEvents(createCdnWorker(), true);
+      sendStockfish('uci');
+      sendStockfish('setoption name MultiPV value 3');
+      sendStockfish('isready');
+    } catch (e2) { handleStockfishFailure(); }
+  }
+}
+
+function handleStockfishMessage(line) {
+  if (line === 'uciok') {
+    sendStockfish('setoption name MultiPV value 3');
+    sendStockfish('isready');
+    return;
+  }
+
+  if (line === 'readyok') {
+    stockfishReady = true;
+    addLog('✅ Stockfish connected and ready.');
+    render();
+    return;
+  }
+
+  if (!stockfishCurrentRequest) return;
+  const r = stockfishCurrentRequest;
+
+  if (line.startsWith('info ') && line.includes(' pv ')) {
+    const mp = line.match(/\bmultipv\s+(\d+)/);
+    const cp = line.match(/\bscore\s+cp\s+(-?\d+)/);
+    const mate = line.match(/\bscore\s+mate\s+(-?\d+)/);
+    const pv = line.match(/\bpv\s+(.+)$/);
+    if (!pv) return;
+
+    const n = mp ? parseInt(mp[1], 10) : 1;
+    let score = 0;
+
+    if (mate) {
+      const m = parseInt(mate[1], 10);
+      score = m > 0 ? 100000 - Math.min(m * 100, 90000) : -100000 + Math.min(Math.abs(m) * 100, 90000);
+    } else if (cp) score = parseInt(cp[1], 10);
+
+    const moves = pv[1].trim().split(/\s+/);
+    r.lines[n] = { multipv: n, score, pv: moves, uci: moves[0] };
+    return;
+  }
+
+  if (line.startsWith('bestmove ')) {
+    clearTimeout(r.timeout);
+    const arr = Object.keys(r.lines).map(k => r.lines[k]).sort((a, b) => a.multipv - b.multipv);
+    stockfishCurrentRequest = null;
+    r.resolve(arr.length ? arr : null);
+  }
+}
+
+function askStockfish(g) {
+  return new Promise(resolve => {
+    if (!stockfishReady || !stockfishEngine || stockfishFailed) { resolve(null); return; }
+
+    if (stockfishCurrentRequest) sendStockfish('stop');
+
+    const settings = DIFFICULTIES[difficulty];
+    const r = { lines: {}, resolve, timeout: null };
+    stockfishCurrentRequest = r;
+
+    sendStockfish('ucinewgame');
+    sendStockfish('position fen ' + g.fen());
+    sendStockfish('setoption name MultiPV value ' + settings.multiPV);
+
+    if (settings.limitStrength) {
+      sendStockfish('setoption name UCI_LimitStrength value true');
+      sendStockfish('setoption name UCI_Elo value ' + settings.elo);
+    } else {
+      sendStockfish('setoption name UCI_LimitStrength value false');
+      sendStockfish('setoption name Skill Level value 20');
+    }
+
+    sendStockfish('go movetime ' + settings.moveTime);
+
+    r.timeout = setTimeout(() => {
+      if (stockfishCurrentRequest !== r) return;
+      sendStockfish('stop');
+      setTimeout(() => {
+        if (stockfishCurrentRequest !== r) return;
+        stockfishCurrentRequest = null;
+        const arr = Object.keys(r.lines).map(k => r.lines[k]).sort((a, b) => a.multipv - b.multipv);
+        resolve(arr.length ? arr : null);
+      }, 150);
+    }, settings.moveTime + 2500);
+  });
+}
+
+function getMockCandidates(g) {
+  const moves = g.moves({ verbose: true });
+  return moves.map(m => ({
+    move: m,
+    score: (m.captured ? PIECE_VALUES[m.captured] * 0.25 : 0) + Math.random() * 30,
+    multipv: 0,
+    uci: m.from + m.to + (m.promotion || ''),
+    pv: [m.from + m.to + (m.promotion || '')]
+  })).sort((a, b) => b.score - a.score).slice(0, 3);
+}
+
+/* ---------------- BOT TURN & KING CAPTURE ---------------- */
+
+async function startBotTurn() {
+  if (gameOver || botThinking) return;
+
+  botThinking = true;
+
+  const whiteKing = getKingPos(game.board(), 'w');
+  if (whiteKing) {
+    const kingAttacks = getAttackingMovesToSquare(game, whiteKing.square, 'b');
+    if (kingAttacks.length > 0) {
+      const atk = kingAttacks[0];
+      game.remove(whiteKing.square);
+      game.remove(atk.from);
+      game.put({ type: atk.piece, color: 'b' }, whiteKing.square);
+
+      lastMove = { from: atk.from, to: whiteKing.square };
+      addLog(`💥 Black: ${atk.piece.toUpperCase()} captures the White King on ${whiteKing.square}!`);
+      endGame('King captured! Victory for Black');
+      botThinking = false;
+      render();
+      return;
+    }
+  }
+
+  addLog('♟ Stockfish is calculating trajectories...');
+  render();
+
+  setTimeout(async () => {
+    try {
+      let raw = null;
+      if (stockfishReady && !stockfishFailed) raw = await askStockfish(game);
+
+      let candidates = [];
+
+      if (raw && raw.length) {
+        candidates = raw.slice(0, 3).map(line => {
+          const move = findMoveByUci(game, line.uci);
+          return move ? { move, score: line.score, multipv: line.multipv, uci: line.uci, pv: line.pv } : null;
+        }).filter(Boolean);
+      }
+
+      if (candidates.length === 0) {
+        addLog('⚙️ MOCK mode used.');
+        candidates = getMockCandidates(game);
+      }
+
+      const selection = chooseRiskAwareMove(game, candidates);
+
+      if (!selection || !selection.chosen) {
+        addLog("The bot has no legal move.");
+        botThinking = false; render(); return;
+      }
+
+      logTrajectoryAnalysis(selection);
+
+      const move = selection.chosen.move;
+      const result = game.move(move);
+
+      if (!result) {
+        addLog('⚠ Invalid engine move.');
+        botThinking = false; render(); return;
+      }
+
+      lastMove = { from: move.from, to: move.to };
+      addLog(`Black: ${result.san}`);
+
+      triggerRiskZone();
+
+      if (!gameOver) {
+        checkBoardStatus();
+        if (!gameOver) addLog("White's turn");
+      }
+
+    } catch (err) {
+      console.error(err);
+      addLog('⚠ Engine error: ' + err.message);
+    }
+
+    botThinking = false;
+    render();
+  }, 60);
+}
+
+/* ---------------- RISK ZONE HAZARD ---------------- */
+
+function triggerRiskZone() {
+    // The previously revealed square is only shown until the next move:
+    // clear it from the state before computing the new draw.
+    temporarilyRevealedSquare = null;
+
+    const randomIndex = Math.floor(Math.random() * riskSquares.length);
+    const targetSquare = riskSquares[randomIndex];
+
+    const pieceOnSquare = game.get(targetSquare);
+
+    if (pieceOnSquare) {
+        // Log the swallowing event
+        addLog(`⚠️ Risk Zone: ${pieceOnSquare.color === 'w' ? 'white' : 'black'} ${PIECE_NAME_EN[pieceOnSquare.type]} swallowed on ${targetSquare}!`);
+
+        // Temporarily reveal the square (rendering handled by renderBoard() via state)
+        temporarilyRevealedSquare = targetSquare;
+
+        if (isPinned(targetSquare, pieceOnSquare.color)) {
+            game.remove(targetSquare);
+            gameOver = true;
+            endGame('Draw (pinned piece swallowed by the Risk Zone!)');
+            return;
+        }
+
+        game.remove(targetSquare);
+
+        if (pieceOnSquare.type === 'k') {
+            gameOver = true;
+            const winner = pieceOnSquare.color === 'w' ? 'Black' : 'White';
+            endGame('King swallowed! Victory for ' + winner);
+            return;
+        }
+    }
+    // If no piece was swallowed, the square remains hidden (temporarilyRevealedSquare = null)
+}
+
+/* ---------------- HUMAN PLAYER ---------------- */
+
+function executeKingCapture(fromSq, toSq, pieceType) {
+  game.remove(toSq);
+  game.remove(fromSq);
+  game.put({ type: pieceType, color: 'w' }, toSq);
+
+  lastMove = { from: fromSq, to: toSq };
+  addLog(`💥 White: ${pieceType.toUpperCase()} captures the Black King on ${toSq}!`);
+  endGame('King captured! Victory for White');
+  render();
+}
+
+function handleHumanMove(fromSq, toSq, promotion) {
+  const obj = { from: fromSq, to: toSq };
+  if (promotion) obj.promotion = promotion;
+
+  const result = game.move(obj);
+
+  if (result) {
+    lastMove = { from: fromSq, to: toSq };
+    addLog('White: ' + result.san);
+    triggerRiskZone();
+
+    if (!gameOver) {
+      checkBoardStatus();
+      if (!gameOver) {
+        addLog("Black's turn");
+        render();
+        startBotTurn();
+        return;
+      }
+    }
+  } else {
+    addLog('Illegal move.');
+  }
+  render();
+}
+
+function squareClick(sq) {
+  if (gameOver || botThinking || promotionPending || game.turn() !== 'w') return;
+
+  const blackKing = getKingPos(game.board(), 'b');
+
+  if (selectedSquare === null) {
+    const piece = game.get(sq);
+    if (piece && piece.color === 'w') {
+      selectedSquare = sq;
+      legalTargets = game.moves({ square: sq, verbose: true });
+
+      if (blackKing) {
+        const file0 = FILES.indexOf(sq[0]);
+        const rank0 = parseInt(sq[1], 10) - 1;
+        if (canPieceReachSquare(game.board(), 7 - rank0, file0, blackKing.i, blackKing.j, piece.type, 'w')) {
+          legalTargets.push({ from: sq, to: blackKing.square, captured: 'k', isKingCapture: true });
+        }
+      }
+      render();
+    }
+    return;
+  }
+
+  if (sq === selectedSquare) {
+    selectedSquare = null; legalTargets = []; render(); return;
+  }
+
+  const clickedPiece = game.get(sq);
+  if (clickedPiece && clickedPiece.color === 'w') {
+    selectedSquare = sq;
+    legalTargets = game.moves({ square: sq, verbose: true });
+
+    if (blackKing) {
+      const file0 = FILES.indexOf(sq[0]);
+      const rank0 = parseInt(sq[1], 10) - 1;
+      if (canPieceReachSquare(game.board(), 7 - rank0, file0, blackKing.i, blackKing.j, clickedPiece.type, 'w')) {
+        legalTargets.push({ from: sq, to: blackKing.square, captured: 'k', isKingCapture: true });
+      }
+    }
+    render();
+    return;
+  }
+
+  const targetMoves = legalTargets.filter(m => m.to === sq);
+  const from = selectedSquare;
+  const selectedPiece = game.get(from);
+  selectedSquare = null; legalTargets = [];
+
+  if (targetMoves.length && targetMoves[0].isKingCapture) {
+    executeKingCapture(from, sq, selectedPiece.type);
+    return;
+  }
+
+  if (targetMoves.length && targetMoves[0].promotion) {
+    promotionPending = { from, to: sq };
+    render();
+    return;
+  }
+
+  handleHumanMove(from, sq, undefined);
+}
+
+function resolvePromotion(pieceType) {
+  const { from, to } = promotionPending;
+  promotionPending = null;
+  handleHumanMove(from, to, pieceType);
+}
+
+function resetGame() {
+  if (stockfishCurrentRequest) sendStockfish('stop');
+
+  game = new Chess();
+  selectedSquare = null; legalTargets = []; lastMove = null; deadlySquare = null;
+  gameOver = false; winnerMsg = ''; logMessages = [];
+  promotionPending = null; botThinking = false;
+  temporarilyRevealedSquare = null;
+
+  addLog('=== NEW GAME ===');
+  addLog('Risk Zone: ranks 4 and 5');
+  addLog("White's turn");
+  render();
+}
+
+function setDifficulty(name) {
+  if (difficulty !== name) {
+    difficulty = name;
+    addLog('⚙️ Difficulty: ' + name);
+    render();
+  }
+}
+
+/* ---------------- UI RENDERING ---------------- */
+
+function startCounts() { return { p: 8, n: 2, b: 2, r: 2, q: 1 }; }
+
+function renderCaptured() {
+  const start = startCounts(), board = game.board();
+  const remaining = { w: { p: 0, n: 0, b: 0, r: 0, q: 0 }, b: { p: 0, n: 0, b: 0, r: 0, q: 0 } };
+
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) {
+    const p = board[i][j];
+    if (p && p.type !== 'k') remaining[p.color][p.type]++;
+  }
+
+  function rowHtml(color) {
+    let html = '';
+    for (const t of ['q', 'r', 'b', 'n', 'p']) {
+      const captured = start[t] - remaining[color][t];
+      if (captured > 0) {
+        const sym = color === 'w' ? UNICODE_WHITE[t] : UNICODE_BLACK[t];
+        html += '<span style="margin-right:3px;">' + sym.repeat(captured) + '</span>';
+      }
+    }
+    return html || '<span style="opacity:0.4;">—</span>';
+  }
+
+  capturedBlackEl.innerHTML = '<span style="font-size:11px;opacity:0.6;">Black lost: </span>' + rowHtml('b');
+  capturedWhiteEl.innerHTML = '<span style="font-size:11px;opacity:0.6;">White lost: </span>' + rowHtml('w');
+}
+
+function renderStatus() {
+  diffButtonsEl.querySelectorAll('.diff-btn').forEach(btn =>
+    btn.classList.toggle('active', btn.textContent === difficulty)
+  );
+
+  let dotColor = 'var(--muted)', text = '';
+
+  if (botThinking) {
+    text = stockfishReady ? `⏳ Stockfish is calculating PV (${difficulty})...` : '⏳ Bot is thinking...';
+    dotColor = 'var(--warn)';
+  } else if (gameOver) {
+    text = winnerMsg; dotColor = winnerMsg.includes('White') ? 'var(--success)' : 'var(--accent)';
+  } else {
+    text = game.turn() === 'w' ? "White's turn (you)" : "Black's turn (bot)";
+    dotColor = game.turn() === 'w' ? 'var(--success)' : 'var(--accent)';
+  }
+
+  statusSectionEl.innerHTML = `<span class="status-dot" style="background:${dotColor};"></span><span>${text}</span>`;
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
+}
+
+function renderLog() {
+  logEl.innerHTML = logMessages.map(msg => {
+    let cls = 'msg-normal';
+    if (msg.includes('Victory') || msg.includes('===') || msg.includes('🏆')) cls = 'msg-win';
+    else if (msg.includes('Illegal') || msg.includes('💥') || msg.includes('💀')) cls = 'msg-danger';
+    else if (msg.includes('⚙️') || msg.includes('Risk Zone') || msg.includes('Stockfish')) cls = 'msg-warn';
+    else if (msg.includes('🔮') || msg.includes('PV:')) cls = 'msg-info';
+    return `<div class="${cls}">${escapeHtml(msg)}</div>`;
+  }).join('');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderPromotion() {
+  if (!promotionPending) { promoOverlay.classList.add('hidden'); return; }
+  promoOverlay.classList.remove('hidden');
+  promoChoicesEl.innerHTML = '';
+
+  ['q', 'r', 'b', 'n'].forEach(pt => {
+    const div = document.createElement('div');
+    div.className = 'promo-choice';
+    div.textContent = UNICODE_WHITE[pt];
+    div.addEventListener('click', () => resolvePromotion(pt));
+    promoChoicesEl.appendChild(div);
+  });
+}
+
+function renderGameOver() {
+  if (!gameOver) { overOverlay.classList.add('hidden'); return; }
+  overOverlay.classList.remove('hidden');
+  overResultEl.textContent = winnerMsg;
+}
+
+function renderBoard() {
+  boardEl.innerHTML = '';
+  const board = game.board();
+  let kingInCheckSq = null;
+
+  if (game.in_check()) {
+    for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) {
+      const p = board[i][j];
+      if (p && p.type === 'k' && p.color === game.turn()) kingInCheckSq = FILES[j] + (8 - i);
+    }
+  }
+
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) {
+    const rankNum = 8 - i, fileLetter = FILES[j], sqName = fileLetter + rankNum;
+    const isLight = (i + j) % 2 === 0;
+    const div = document.createElement('div');
+    div.className = 'square ' + (isLight ? 'light' : 'dark') + ' square-' + sqName;
+
+    if (lastMove && (lastMove.from === sqName || lastMove.to === sqName)) div.classList.add('last-move');
+    if (kingInCheckSq === sqName) div.classList.add('check');
+    if (selectedSquare === sqName) div.classList.add('selected');
+    if (deadlySquare === sqName) div.classList.add('deadly');
+    if (temporarilyRevealedSquare === sqName) div.classList.add('risk-revealed');
+
+    const piece = board[i][j];
+    if (piece) {
+      const span = document.createElement('span');
+      span.className = 'piece ' + (piece.color === 'w' ? 'white' : 'black');
+      span.textContent = piece.color === 'w' ? UNICODE_WHITE[piece.type] : UNICODE_BLACK[piece.type];
+      div.appendChild(span);
+    }
+
+    if (deadlySquare === sqName) {
+      const skull = document.createElement('span');
+      skull.className = 'skull'; skull.textContent = '☠'; div.appendChild(skull);
+    }
+
+    if (selectedSquare) {
+      const targets = legalTargets.filter(m => m.to === sqName);
+      if (targets.length) {
+        const marker = document.createElement('span');
+        marker.className = targets.some(t => t.captured || t.isKingCapture) ? 'legal-capture' : 'legal-dot';
+        div.appendChild(marker);
+      }
+    }
+
+    if (j === 0) {
+      const rl = document.createElement('span');
+      rl.className = 'rank-label ' + (isLight ? 'on-light' : 'on-dark');
+      rl.textContent = rankNum; div.appendChild(rl);
+    }
+
+    if (i === 7) {
+      const fl = document.createElement('span');
+      fl.className = 'file-label ' + (isLight ? 'on-light' : 'on-dark');
+      fl.textContent = fileLetter; div.appendChild(fl);
+    }
+
+    div.addEventListener('click', () => squareClick(sqName));
+    boardEl.appendChild(div);
+  }
+}
+
+function render() {
+  renderBoard(); renderCaptured(); renderStatus(); renderLog(); renderPromotion(); renderGameOver();
+}
+
+resetGame();
+setTimeout(initStockfish, 100);
+
+})();
+</script>
+</body>
+</html>
